@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.noorall"
-version = "1.0-SNAPSHOT"
+version = "0.1.0"
 
 repositories {
     mavenCentral()
@@ -33,8 +33,10 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Initial version
-        """.trimIndent()
+        <strong>v0.1.0</strong><br>
+        &nbsp;&nbsp;• Initial release of GitHelper plugin<br>
+        &nbsp;&nbsp;• Supports spotless hooks<br>
+        """
     }
 }
 

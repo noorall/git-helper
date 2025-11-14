@@ -1,0 +1,181 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'CHANGELOG.md'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Check commit message and extract version
+        id: extract_version
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Commit message: $COMMIT_MSG"
+          
+          # Check if commit message matches the required format and extract version.
+          if [[ "$COMMIT_MSG" =~ ^chore:\ release\ git\ helper\ v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "Extracted version: $VERSION"
+          else
+            echo "Commit message does not match required format: 'chore: release git helper v#.#.#'"
+            echo "Skipping release workflow"
+            exit 1
+          fi
+
+      - name: Create release branch
+        run: |
+          git config --global user.name "noorall"
+          git config --global user.email "863485501@qq.com"
+          git checkout -b release-v${{ steps.extract_version.outputs.VERSION }}
+          git push origin release-v${{ steps.extract_version.outputs.VERSION }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Cache Gradle wrapper
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: ${{ runner.os }}-gradle-wrapper-${{ hashFiles('gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-wrapper-
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          # Enable caching of Gradle dependencies and build artifacts
+          cache-disabled: false
+          cache-read-only: false
+
+      - name: Build plugin
+        run: ./gradlew buildPlugin
+
+      - name: Get previous tag
+        id: previous_tag
+        run: |
+          # Get the previous tag (second most recent)
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous tag found, this is the first release"
+            echo "PREVIOUS_TAG=" >> $GITHUB_OUTPUT
+            echo "HAS_PREVIOUS=false" >> $GITHUB_OUTPUT
+          else
+            echo "Previous tag: $PREVIOUS_TAG"
+            echo "PREVIOUS_TAG=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+            echo "HAS_PREVIOUS=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract changelog content
+        id: changelog
+        run: |
+          # Extract the latest version's changelog content (everything under the first ## heading until the next ## or end of file)
+          # Replace ### with ## in the extracted content
+          CHANGELOG_CONTENT=$(awk '/^## \[/{if(p){exit}; if(!p) {p=1; next}} p' CHANGELOG.md | sed 's/^###/##/')
+          
+          # Use heredoc to handle multiline content
+          {
+            echo 'CONTENT<<EOF'
+            echo "$CHANGELOG_CONTENT"
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+          
+          echo "Extracted changelog content:"
+          echo "$CHANGELOG_CONTENT"
+
+      - name: Generate What's Changed
+        id: whats_changed
+        run: |
+          CURRENT_TAG="v${{ steps.extract_version.outputs.VERSION }}"
+          PREVIOUS_TAG="${{ steps.previous_tag.outputs.PREVIOUS_TAG }}"
+          HAS_PREVIOUS="${{ steps.previous_tag.outputs.HAS_PREVIOUS }}"
+          REPO="${{ github.repository }}"
+          
+          echo "## What's Changed" > whats_changed.md
+          echo "" >> whats_changed.md
+          
+          if [ "$HAS_PREVIOUS" = "true" ]; then
+            # Get commits between previous tag and current tag
+            git log ${PREVIOUS_TAG}..HEAD --pretty=format:"* %s **by \\@%an** in %H" --no-merges > temp_commits.txt
+          else
+            # First release: list all commits in current branch
+            git log --pretty=format:"* %s **by \\@%an** in %H" --no-merges > temp_commits.txt
+          fi
+          
+          # Process commits to convert PR references and commit hashes to links
+          # Escape slashes in REPO for use in sed
+          REPO_ESCAPED=$(echo "$REPO" | sed 's/\//\\\//g')
+          
+          while IFS= read -r line; do
+            # Check if line contains PR reference (#123)
+            if echo "$line" | grep -qE '#[0-9]+'; then
+              # Has PR reference: convert PR references to links and remove commit hash
+              line=$(echo "$line" | sed -E 's/ in [a-f0-9]{40}$//')
+              line=$(echo "$line" | sed -E 's/#([0-9]+)/in [#\1](https:\/\/github.com\/'"$REPO_ESCAPED"'\/pull\/\1)/g')
+            else
+              # No PR reference: convert commit hash to link
+              COMMIT_HASH=$(echo "$line" | grep -oE '[a-f0-9]{40}$')
+              if [ -n "$COMMIT_HASH" ]; then
+                SHORT_HASH=${COMMIT_HASH:0:7}
+                line=$(echo "$line" | sed "s/${COMMIT_HASH}$/[${SHORT_HASH}](https:\/\/github.com\/${REPO_ESCAPED}\/commit\/${COMMIT_HASH})/")
+              fi
+            fi
+            
+            echo "$line" >> whats_changed.md
+          done < temp_commits.txt
+          
+          rm temp_commits.txt
+          
+          if [ "$HAS_PREVIOUS" = "true" ]; then
+            echo "" >> whats_changed.md
+            echo "" >> whats_changed.md
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${CURRENT_TAG}" >> whats_changed.md
+          fi
+          
+          # Output the content for use in release body
+          CONTENT=$(cat whats_changed.md)
+          echo "CONTENT<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Git tag
+        run: |
+          git tag -a "v${{ steps.extract_version.outputs.VERSION }}" -m "Release v${{ steps.extract_version.outputs.VERSION }}"
+          git push origin "v${{ steps.extract_version.outputs.VERSION }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.extract_version.outputs.VERSION }}
+          name: v${{ steps.extract_version.outputs.VERSION }}
+          body: |
+            ${{ steps.changelog.outputs.CONTENT }}
+            
+            ${{ steps.whats_changed.outputs.CONTENT }}
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+          files: |
+            build/distributions/GitHelper-${{ steps.extract_version.outputs.VERSION }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
