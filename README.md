@@ -25,9 +25,12 @@ GitHelper is a powerful IntelliJ IDEA plugin designed to enhance your Git workfl
 
 ### Installation
 
-1. In IntelliJ IDEA, go to `Settings/Preferences` → `Plugins`
-2. Search for "GitHelper" and install the plugin
-3. Restart the IDE to activate the plugin
+> **Note: This plugin is currently in the testing phase and is not yet available on the IntelliJ IDEA Plugin Marketplace.**
+
+1. Download the plugin ZIP file from the [Releases](https://github.com/leya521/git-helper/releases) page
+2. In IntelliJ IDEA, go to `Settings/Preferences` → `Plugins` → `⚙️` (gear icon) → `Install Plugin from Disk...`
+3. Select the downloaded ZIP file
+4. Restart the IDE to activate the plugin
 
 ### Configuration and Usage
 

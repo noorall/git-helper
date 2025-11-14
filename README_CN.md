@@ -25,9 +25,12 @@ GitHelper是一个强大的IntelliJ IDEA插件，旨在通过在提交时自动�
 
 ### 安装方式
 
-1. 在IntelliJ IDEA中，进入 `Settings/Preferences` → `Plugins`
-2. 搜索 "GitHelper" 并安装插件
-3. 重启IDE以激活插件
+> **注意：此插件目前处于测试阶段，尚未在IntelliJ IDEA插件市场发布。**
+
+1. 从 [Releases](https://github.com/leya521/git-helper/releases) 页面下载插件ZIP文件
+2. 在IntelliJ IDEA中，进入 `Settings/Preferences` → `Plugins` → `⚙️` (齿轮图标) → `Install Plugin from Disk...`
+3. 选择下载的ZIP文件
+4. 重启IDE以激活插件
 
 ### 配置与使用
 
