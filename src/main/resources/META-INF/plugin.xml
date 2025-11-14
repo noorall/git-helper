@@ -1,0 +1,64 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.noorall.GitHelper</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
+    <name>GitHelper</name>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor email="leya5211@gmail.com" url="https://github.com/noorall">noorall</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
+    <description><![CDATA[
+        GitHelper is a powerful IntelliJ IDEA plugin that enhances your Git workflow by automatically running code formatting tools during commits.<br>
+        <br>
+        <strong>Features:</strong><br>
+        • Automatically runs Spotless Maven plugin on changed files before commit<br>
+        • Git pre-commit hooks integration for universal compatibility<br>
+        • Shows progress indicator during formatting process<br>
+        • Configurable settings to enable/disable features<br>
+        • Seamless integration with Git commit workflow<br>
+        • Works with any Git client when using hooks mode<br>
+        <br>
+        <em>Improve your code quality and maintain consistent formatting effortlessly!</em>
+    ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.vcs</depends>
+    <depends>Git4Idea</depends>
+
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- Settings -->
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.noorall.githelper.settings.GitHelperConfigurable"
+            id="com.noorall.githelper.settings"
+            displayName="GitHelper"/>
+
+        <applicationService serviceImplementation="com.noorall.githelper.settings.GitHelperSettings"/>
+
+        <!-- Git commit listener -->
+        <checkinHandlerFactory implementation="com.noorall.githelper.git.GitHelperCheckinHandlerFactory"/>
+
+        <!-- Notification groups -->
+        <notificationGroup id="GitHelper" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <!-- Git Hooks Configuration Action -->
+        <action id="GitHelper.ConfigureHooks"
+                class="com.noorall.githelper.actions.GitHooksConfigAction"
+                text="Configure Git Hooks"
+                description="Configure Git pre-commit hooks for Spotless formatting">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="VcsGroup" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
