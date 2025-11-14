@@ -43,7 +43,7 @@ class SpotlessStatusManager(private val project: Project) {
         private const val TIMEOUT_SECONDS = 300 // 5 minute timeout
     }
 
-    private val projectPath = project.basePath ?: throw IllegalStateException("Project path is null")
+    private val projectPath = project.basePath
     private val statusDir = File(projectPath, STATUS_DIR)
     private val statusFile = File(statusDir, STATUS_FILE)
     private val lockFile = File(statusDir, LOCK_FILE)
