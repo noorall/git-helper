@@ -177,23 +177,25 @@ class GitHooksManager(private val project: Project) {
      */
     private fun generatePreCommitHookContent(): String {
         val projectPath = project.basePath ?: ""
-        
+        val settings = com.noorall.githelper.settings.GitHelperSettings.getInstance()
+        val hookTimeout = settings.hookTimeout
+
         return """#!/bin/sh
 # GitHelper Spotless Pre-commit Hook with Async Communication
 # This hook works with IDEA plugin to format Java files using async status monitoring
 
 # Global timeout for the entire hook execution
 HOOK_START_TIME=${'$'}(date +%s)
-HOOK_TIMEOUT=${'$'}{GITHELPER_HOOK_TIMEOUT:-900}  # 15 minutes default
-HOOK_MAX_TIMEOUT=1800  # 30 minutes maximum
+HOOK_TIMEOUT=${'$'}{GITHELPER_HOOK_TIMEOUT:-$hookTimeout}  # Default from plugin settings
+HOOK_MAX_TIMEOUT=600  # 10 minutes maximum
 
 # Validate hook timeout
 if [ ${'$'}HOOK_TIMEOUT -gt ${'$'}HOOK_MAX_TIMEOUT ]; then
     HOOK_TIMEOUT=${'$'}HOOK_MAX_TIMEOUT
     echo "GitHelper: Hook timeout capped at ${'$'}HOOK_MAX_TIMEOUT seconds"
-elif [ ${'$'}HOOK_TIMEOUT -lt 300 ]; then
-    HOOK_TIMEOUT=300
-    echo "GitHelper: Hook timeout minimum is 300 seconds"
+elif [ ${'$'}HOOK_TIMEOUT -lt 30 ]; then
+    HOOK_TIMEOUT=30
+    echo "GitHelper: Hook timeout minimum is 30 seconds"
 fi
 
 # Function to check global timeout
@@ -249,9 +251,9 @@ cleanup_status_files() {
 # Function to wait for IDEA plugin status with enhanced timeout handling
 wait_for_idea_plugin() {
     # Configurable timeout values
-    local default_timeout=180      # 3 minutes default timeout
+    local default_timeout=$hookTimeout      # Default from plugin settings
     local max_timeout=600         # 10 minutes maximum timeout
-    local warning_timeout=120     # 2 minutes warning threshold
+    local warning_timeout=${'$'}((default_timeout * 2 / 3))     # 2/3 of timeout as warning threshold
     local check_interval=1        # 1 second check interval
     local progress_timeout=30     # 30 seconds without progress = stalled
     

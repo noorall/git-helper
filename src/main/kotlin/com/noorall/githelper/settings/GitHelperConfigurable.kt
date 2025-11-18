@@ -70,6 +70,13 @@ class GitHelperConfigurable : Configurable {
                         .comment("Automatically install Git hooks when opening new Git repositories")
                 }
 
+                row("Hook timeout (seconds):") {
+                    intTextField(range = 30..600)
+                        .bindIntText(settings::hookTimeout)
+                        .columns(COLUMNS_SHORT)
+                        .comment("Timeout for pre-commit hook execution (30-600 seconds, default: 60)")
+                }
+
                 row {
                     button("Configure Git Hooks...") {
                         configureGitHooks()

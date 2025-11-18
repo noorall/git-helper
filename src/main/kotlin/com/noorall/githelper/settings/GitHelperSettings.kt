@@ -38,6 +38,7 @@ class GitHelperSettings : PersistentStateComponent<GitHelperSettings> {
     var useIntellijHandler: Boolean = false  // Default changed to false
     var useGitHooks: Boolean = true  // New: Default to use Git Hooks
     var autoInstallHooksForNewProjects: Boolean = true  // New: Auto-install option
+    var hookTimeout: Int = 60  // Pre-commit hook timeout in seconds (default: 60s)
 
     override fun getState(): GitHelperSettings = this
     
