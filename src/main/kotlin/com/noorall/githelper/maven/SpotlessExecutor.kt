@@ -29,6 +29,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.noorall.githelper.logging.GitHelperLogger
 import java.io.File
+import java.util.Timer
+import java.util.TimerTask
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -265,6 +267,19 @@ class SpotlessExecutor(
         val startTime = System.currentTimeMillis()
         val timeoutMs = timeoutMinutes * 60 * 1000L
 
+        // Create timer to periodically update time display
+        val timer = Timer(true)
+        timer.scheduleAtFixedRate(object : TimerTask() {
+            override fun run() {
+                if (progressIndicator != null && !processHandler.isProcessTerminated) {
+                    val elapsed = System.currentTimeMillis() - startTime
+                    val elapsedSeconds = elapsed / 1000
+                    // Show elapsed time in a modern, user-friendly format
+                    progressIndicator.text = "Formatting code with spotless (elapsed: ${elapsedSeconds}s)..."
+                }
+            }
+        }, 0, 1000) // Update every second
+
         processHandler.addProcessListener(object : ProcessAdapter() {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                 val text = event.text.trim()
@@ -347,17 +362,12 @@ class SpotlessExecutor(
                         processHandler.destroyProcess()
                         return
                     }
-
-                    // Update progress indicator text with time information
-                    if (progressIndicator != null && elapsed > 0) {
-                        val elapsedSeconds = elapsed / 1000
-                        val remainingSeconds = maxOf(0, (timeoutMs - elapsed) / 1000)
-                        progressIndicator.text = "Formatting files with Spotless... (${elapsedSeconds}s elapsed, ${remainingSeconds}s remaining)"
-                    }
                 }
             }
 
             override fun processTerminated(event: ProcessEvent) {
+                // Stop the timer
+                timer.cancel()
                 val exitCode = event.exitCode
                 val elapsed = System.currentTimeMillis() - startTime
                 GitHelperLogger.info("Maven process terminated with exit code: $exitCode after ${elapsed}ms")
