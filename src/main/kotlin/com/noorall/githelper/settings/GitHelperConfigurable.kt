@@ -279,6 +279,9 @@ class GitHelperConfigurable : Configurable {
      * Refresh Git Hooks status display
      */
     private fun refreshGitHooksStatus() {
+        // Refresh VFS to ensure file system changes are detected
+        com.intellij.openapi.vfs.VirtualFileManager.getInstance().syncRefresh()
+
         statusLabel?.let { label ->
             val newStatus = getGitHooksStatus()
             label.text = newStatus
@@ -286,7 +289,10 @@ class GitHelperConfigurable : Configurable {
     }
 
     private fun getGitHooksStatus(): String {
-        val project = ProjectManager.getInstance().openProjects.firstOrNull()
+        // Try to get the current project from various sources
+        val project = ProjectManager.getInstance().openProjects.firstOrNull { !it.isDisposed }
+            ?: ProjectManager.getInstance().defaultProject.takeIf { !it.isDisposed }
+
         if (project == null) {
             return "📁 Open a project to see Git hooks status"
         }

@@ -54,7 +54,7 @@ class GitHooksManager(private val project: Project) {
             val preCommitFile = File(hooksDir, PRE_COMMIT_HOOK_NAME)
             
             // Backup existing hook (if exists)
-            if (preCommitFile.exists()) {
+            if (preCommitFile.exists() && !isPreCommitHookInstalled()) {
                 backupExistingHook(preCommitFile)
             }
 
@@ -90,16 +90,39 @@ class GitHooksManager(private val project: Project) {
                 return true
             }
 
-            // Delete our hook
-            preCommitFile.delete()
+            // Delete our hook with retry mechanism
+            var deleteSuccess = false
+            var attempts = 0
+            val maxAttempts = 3
+
+            while (!deleteSuccess && attempts < maxAttempts) {
+                attempts++
+                deleteSuccess = preCommitFile.delete()
+
+                if (!deleteSuccess) {
+                    GitHelperLogger.warn("Failed to delete pre-commit hook file on attempt $attempts: ${preCommitFile.absolutePath}")
+                    if (attempts < maxAttempts) {
+                        // Wait a bit before retrying
+                        Thread.sleep(10)
+                    }
+                }
+            }
+
+            if (!deleteSuccess) {
+                GitHelperLogger.error("Failed to delete pre-commit hook file after $maxAttempts attempts: ${preCommitFile.absolutePath}")
+                return false
+            }
 
             // Restore backup hook (if exists)
             if (backupFile.exists()) {
-                backupFile.renameTo(preCommitFile)
-                GitHelperLogger.info("Restored original pre-commit hook from backup")
+                if (!backupFile.renameTo(preCommitFile)) {
+                    GitHelperLogger.error("Failed to restore backup hook from: ${backupFile.absolutePath}")
+                    return false
+                }
+                GitHelperLogger.info("Original pre-commit hook has been restored from backup")
+            } else {
+                GitHelperLogger.info("GitHelper pre-commit hook uninstalled successfully")
             }
-
-            GitHelperLogger.info("Successfully uninstalled Git pre-commit hook")
             return true
 
         } catch (e: Exception) {
@@ -122,7 +145,8 @@ class GitHooksManager(private val project: Project) {
         // Check if this is our installed hook
         return try {
             val content = preCommitFile.readText()
-            content.contains("GitHelper Spotless Pre-commit Hook")
+            content.contains("GitHelper Spotless Pre-commit Hook") ||
+            content.contains("GitHelper Spotless Pre-commit Hook with Async Communication")
         } catch (e: Exception) {
             false
         }
@@ -185,8 +209,8 @@ class GitHooksManager(private val project: Project) {
 # This hook works with IDEA plugin to format Java files using async status monitoring
 
 # Global timeout for the entire hook execution
-HOOK_START_TIME=${'$'}(date +%s)
-HOOK_TIMEOUT=${'$'}{GITHELPER_HOOK_TIMEOUT:-$hookTimeout}  # Default from plugin settings
+HOOK_START_TIME=$(date +%s)
+HOOK_TIMEOUT=${hookTimeout}  # Timeout from plugin settings
 HOOK_MAX_TIMEOUT=600  # 10 minutes maximum
 
 # Validate hook timeout
@@ -198,29 +222,10 @@ elif [ ${'$'}HOOK_TIMEOUT -lt 30 ]; then
     echo "GitHelper: Hook timeout minimum is 30 seconds"
 fi
 
-# Function to check global timeout
-check_global_timeout() {
-    local current_time=${'$'}(date +%s)
-    local elapsed=${'$'}((current_time - HOOK_START_TIME))
-    local remaining=${'$'}((HOOK_TIMEOUT - elapsed))
-    
-    if [ ${'$'}elapsed -ge ${'$'}HOOK_TIMEOUT ]; then
-        echo "GitHelper: Global hook timeout reached (${'$'}HOOK_TIMEOUT seconds)"
-        echo "GitHelper: You can increase timeout by setting GITHELPER_HOOK_TIMEOUT environment variable"
-        cleanup_status_files
-        exit 1
-    fi
-    
-    # Warn when approaching timeout
-    if [ ${'$'}remaining -le 60 ] && [ ${'$'}((remaining % 20)) -eq 0 ]; then
-        echo "GitHelper: Warning - Hook will timeout in ${'$'}remaining seconds"
-    fi
-}
-
 echo "GitHelper: Starting pre-commit formatting process (global timeout: ${'$'}HOOK_TIMEOUT seconds)..."
 
 # Get list of staged Java files
-STAGED_JAVA_FILES=${'$'}(git diff --cached --name-only --diff-filter=ACM | grep '\.java${'$'}')
+STAGED_JAVA_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.java$')
 
 if [ -z "${'$'}STAGED_JAVA_FILES" ]; then
     echo "GitHelper: No Java files to format"
@@ -251,35 +256,14 @@ cleanup_status_files() {
 # Function to wait for IDEA plugin status with enhanced timeout handling
 wait_for_idea_plugin() {
     # Configurable timeout values
-    local default_timeout=$hookTimeout      # Default from plugin settings
-    local max_timeout=600         # 10 minutes maximum timeout
-    local warning_timeout=${'$'}((default_timeout * 2 / 3))     # 2/3 of timeout as warning threshold
+    local timeout=${'$'}HOOK_TIMEOUT     # Default from plugin settings
     local check_interval=1        # 1 second check interval
-    local progress_timeout=30     # 30 seconds without progress = stalled
-    
-    # Try to read timeout from environment or use default
-    local timeout=${'$'}{GITHELPER_TIMEOUT:-${'$'}default_timeout}
-    
-    # Validate timeout range
-    if [ ${'$'}timeout -gt ${'$'}max_timeout ]; then
-        timeout=${'$'}max_timeout
-        echo "GitHelper: Timeout capped at ${'$'}max_timeout seconds"
-    elif [ ${'$'}timeout -lt 30 ]; then
-        timeout=30
-        echo "GitHelper: Timeout minimum is 30 seconds"
-    fi
     
     local elapsed=0
-    local last_progress_time=0
-    local last_progress_value=""
-    local warning_shown=false
     
     echo "GitHelper: Waiting for IDEA plugin to complete formatting (timeout: ${'$'}timeout seconds)..."
     
     while [ ${'$'}elapsed -lt ${'$'}timeout ]; do
-        # Check global timeout at each iteration
-        check_global_timeout
-        
         if [ -f "${'$'}STATUS_FILE" ]; then
             # Read status from file
             if grep -q "status=SUCCESS" "${'$'}STATUS_FILE"; then
@@ -287,10 +271,6 @@ wait_for_idea_plugin() {
                 return 0
             elif grep -q "status=FAILED" "${'$'}STATUS_FILE"; then
                 echo "GitHelper: IDEA plugin formatting failed"
-                if grep -q "message=" "${'$'}STATUS_FILE"; then
-                    local message=${'$'}(grep "message=" "${'$'}STATUS_FILE" | cut -d'=' -f2-)
-                    echo "GitHelper: Error: ${'$'}message"
-                fi
                 return 1
             elif grep -q "status=CANCELLED" "${'$'}STATUS_FILE"; then
                 echo "GitHelper: IDEA plugin formatting was cancelled"
@@ -298,59 +278,12 @@ wait_for_idea_plugin() {
             elif grep -q "status=TIMEOUT" "${'$'}STATUS_FILE"; then
                 echo "GitHelper: IDEA plugin formatting timed out"
                 return 1
-            elif grep -q "status=RUNNING" "${'$'}STATUS_FILE"; then
-                # Check progress and detect stalls
-                if grep -q "progress=" "${'$'}STATUS_FILE"; then
-                    local current_progress=${'$'}(grep "progress=" "${'$'}STATUS_FILE" | cut -d'=' -f2)
-                    local progress_percent=${'$'}(echo "${'$'}current_progress * 100" | bc 2>/dev/null || echo "0")
-                    
-                    # Check if progress has changed
-                    if [ "${'$'}current_progress" != "${'$'}last_progress_value" ]; then
-                        last_progress_time=${'$'}elapsed
-                        last_progress_value="${'$'}current_progress"
-                        echo "GitHelper: Formatting in progress... ${'$'}{progress_percent%.*}%"
-                    else
-                        # Check for stalled progress
-                        local progress_stall_time=${'$'}((elapsed - last_progress_time))
-                        if [ ${'$'}progress_stall_time -gt ${'$'}progress_timeout ]; then
-                            echo "GitHelper: Warning - No progress for ${'$'}progress_stall_time seconds, formatting may be stalled"
-                            # Consider this a timeout condition
-                            echo "GitHelper: Formatting appears to be stalled, timing out..."
-                            return 1
-                        fi
-                    fi
-                else
-                    echo "GitHelper: Formatting in progress... (no progress info)"
-                fi
-            elif grep -q "status=STARTING" "${'$'}STATUS_FILE"; then
-                echo "GitHelper: IDEA plugin is starting formatting..."
-            fi
-        else
-            # No status file yet, check if we should warn about delay
-            if [ ${'$'}elapsed -gt 10 ] && [ ${'$'}elapsed -lt 15 ]; then
-                echo "GitHelper: Still waiting for IDEA plugin to start..."
             fi
         fi
-        
-        # Show warning at warning threshold
-        if [ ${'$'}elapsed -eq ${'$'}warning_timeout ] && [ "${'$'}warning_shown" = "false" ]; then
-            echo "GitHelper: Warning - Formatting is taking longer than expected (${'$'}warning_timeout seconds)"
-            echo "GitHelper: Will timeout in ${'$'}((timeout - elapsed)) seconds if not completed"
-            warning_shown=true
-        fi
-        
-        # Show countdown in final 30 seconds
-        local remaining=${'$'}((timeout - elapsed))
-        if [ ${'$'}remaining -le 30 ] && [ ${'$'}((remaining % 10)) -eq 0 ]; then
-            echo "GitHelper: Timeout in ${'$'}remaining seconds..."
-        fi
-        
         sleep ${'$'}check_interval
-        elapsed=${'$'}((elapsed + check_interval))
+        elapsed=$((elapsed + check_interval))
     done
-    
     echo "GitHelper: Timeout after ${'$'}timeout seconds waiting for IDEA plugin"
-    echo "GitHelper: You can increase timeout by setting GITHELPER_TIMEOUT environment variable"
     return 1
 }
 
@@ -367,17 +300,15 @@ handle_no_idea_plugin() {
 
 # Main execution logic
 main() {
-    # Initial timeout check
-    check_global_timeout
-    
+    # Wait for IDEA plugin to start
+    sleep 3
+
     # Check if IDEA plugin is available and running
     if [ -f "${'$'}LOCK_FILE" ] || [ -f "${'$'}STATUS_FILE" ]; then
         # IDEA plugin is handling the formatting
         echo "GitHelper: IDEA plugin detected, using async communication mode..."
-        check_global_timeout
         
         if wait_for_idea_plugin; then
-            check_global_timeout
             echo "GitHelper: Re-staging formatted files..."
             echo "${'$'}STAGED_JAVA_FILES" | xargs git add
             cleanup_status_files
@@ -386,8 +317,6 @@ main() {
         else
             echo "GitHelper: IDEA plugin formatting failed"
             cleanup_status_files
-            check_global_timeout
-            
             # Handle fallback - no standalone Maven execution
             handle_no_idea_plugin
             echo "GitHelper: Commit proceeding without formatting"
@@ -396,8 +325,6 @@ main() {
     else
         # No IDEA plugin detected
         echo "GitHelper: No IDEA plugin detected"
-        check_global_timeout
-        
         # Handle fallback - no standalone Maven execution
         handle_no_idea_plugin
         echo "GitHelper: Commit proceeding without formatting"
