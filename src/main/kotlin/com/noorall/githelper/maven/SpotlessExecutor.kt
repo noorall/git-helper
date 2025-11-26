@@ -27,6 +27,8 @@ import com.intellij.execution.process.ProcessOutputTypes
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.application.ApplicationManager
 import com.noorall.githelper.logging.GitHelperLogger
 import java.io.File
 import java.util.Timer
@@ -173,6 +175,21 @@ class SpotlessExecutor(
                 } else {
                     GitHelperLogger.error("  ✗ ${result.module.displayName}: ${result.error ?: "Unknown error"}")
                 }
+            }
+
+            // Add VFS refresh and wait mechanism to ensure IDEA detects file changes
+            if (summary.totalSuccess) {
+                GitHelperLogger.info("Parallel execution completed successfully, refreshing VFS and waiting for IDEA to detect changes...")
+
+                // Refresh VFS to ensure IDEA detects file changes
+                ApplicationManager.getApplication().invokeAndWait {
+                    VirtualFileManager.getInstance().syncRefresh()
+                }
+
+                // Additional wait to ensure file system changes are fully propagated
+                Thread.sleep(1500) // 1.5 seconds should be sufficient for most cases
+
+                GitHelperLogger.info("VFS refresh completed, IDEA should now detect all file changes")
             }
 
             summary.totalSuccess

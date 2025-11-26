@@ -28,6 +28,8 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.noorall.githelper.logging.GitHelperLogger
+import java.util.Timer
+import java.util.TimerTask
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -86,6 +88,18 @@ class ParallelSpotlessExecutor(
         val startTime = System.currentTimeMillis()
         cancelled.set(false)
 
+        // Create global timer for dynamic time display
+        val globalTimer = Timer(true)
+        globalTimer.scheduleAtFixedRate(object : TimerTask() {
+            override fun run() {
+                if (progressIndicator != null && !cancelled.get()) {
+                    val elapsed = System.currentTimeMillis() - startTime
+                    val elapsedSeconds = elapsed / 1000
+                    progressIndicator.text = "Formatting ${modules.size} modules in parallel (elapsed: ${elapsedSeconds}s)..."
+                }
+            }
+        }, 0, 1000) // Update every second
+
         try {
             val futures = modules.mapIndexed { index, module ->
                 executorService.submit<ModuleExecutionResult> {
@@ -93,43 +107,67 @@ class ParallelSpotlessExecutor(
                 }
             }
 
-            // Wait for all tasks to complete
+            // Wait for all tasks to complete with proper synchronization
             val results = mutableListOf<ModuleExecutionResult>()
+            val completedCount = AtomicInteger(0)
+
             for ((index, future) in futures.withIndex()) {
                 try {
                     val result = future.get(timeoutMinutes + 1, TimeUnit.MINUTES)
                     results.add(result)
-                    
+
+                    val completed = completedCount.incrementAndGet()
+
                     // Update overall progress
                     progressIndicator?.let { indicator ->
-                        val overallProgress = (index + 1).toDouble() / modules.size
+                        val overallProgress = completed.toDouble() / modules.size
                         indicator.fraction = overallProgress
-                        indicator.text = "Completed ${index + 1} of ${modules.size} modules"
+                        val elapsed = System.currentTimeMillis() - startTime
+                        val elapsedSeconds = elapsed / 1000
+                        indicator.text = "Formatting ${modules.size} modules in parallel (elapsed: ${elapsedSeconds}s)..."
+                        indicator.text2 = "Completed $completed of ${modules.size} modules"
                     }
+
+                    GitHelperLogger.info("Module completed: ${modules[index].displayName} ($completed/${modules.size})")
+
                 } catch (e: TimeoutException) {
                     GitHelperLogger.error("Module execution timed out: ${modules[index].displayName}")
                     results.add(ModuleExecutionResult(
-                        modules[index], 
-                        false, 
+                        modules[index],
+                        false,
                         timeoutMinutes * 60 * 1000,
                         "Execution timed out"
                     ))
                 } catch (e: Exception) {
                     GitHelperLogger.error("Module execution failed: ${modules[index].displayName}", e)
                     results.add(ModuleExecutionResult(
-                        modules[index], 
-                        false, 
+                        modules[index],
+                        false,
                         0,
                         e.message ?: "Unknown error"
                     ))
                 }
             }
 
+            // Ensure all futures are completed before proceeding
+            val allCompleted = futures.all { future ->
+                try {
+                    future.isDone || future.get(1, TimeUnit.SECONDS) != null
+                } catch (e: Exception) {
+                    true // Consider failed futures as completed
+                }
+            }
+
+            if (!allCompleted) {
+                GitHelperLogger.warn("Not all futures completed properly, waiting additional time...")
+                Thread.sleep(2000) // Additional wait to ensure all processes complete
+            }
+
             val totalDuration = System.currentTimeMillis() - startTime
             val totalSuccess = results.all { it.success }
 
             val summary = ExecutionSummary(results, totalSuccess, totalDuration)
-            
+
             GitHelperLogger.info("Parallel execution completed:")
             GitHelperLogger.info("  Total time: ${totalDuration}ms")
             GitHelperLogger.info("  Success: ${summary.successCount}/${modules.size}")
@@ -138,6 +176,9 @@ class ParallelSpotlessExecutor(
             return summary
 
         } finally {
+            // Stop the global timer
+            globalTimer.cancel()
+
             // Clean up resources
             synchronized(activeProcesses) {
                 activeProcesses.forEach { process ->
