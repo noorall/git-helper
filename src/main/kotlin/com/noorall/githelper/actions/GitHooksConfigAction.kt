@@ -23,6 +23,7 @@ import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.noorall.githelper.git.GitHooksManager
@@ -36,11 +37,11 @@ import com.noorall.githelper.logging.GitHelperLogger
 class GitHooksConfigAction : AnAction("Configure Git Hooks") {
 
     override fun actionPerformed(e: AnActionEvent) {
-        val project = e.project ?: return
-        
-        val hooksManager = GitHooksManager(project)
+        val project = getProjectFromContext(e) ?: return
+
+        val hooksManager = GitHooksManager()
         val status = hooksManager.getHookStatus()
-        
+
         when (status) {
             GitHooksManager.HookStatus.NO_GIT_REPO -> {
                 Messages.showErrorDialog(
@@ -60,6 +61,68 @@ class GitHooksConfigAction : AnAction("Configure Git Hooks") {
             }
         }
     }
+    /**
+     * Get project from action event context, following JetBrains official best practices
+     */
+    private fun getProjectFromContext(e: AnActionEvent): Project? {
+        // Method 1: Use standard AnActionEvent.getProject() - this is the official recommended way
+        val project = e.project
+        if (project != null) {
+            GitHelperLogger.info("Using project from event.getProject(): ${project.name}")
+            return validateProjectAccess(project)
+        }
+
+        // Method 3: Handle no project case
+        GitHelperLogger.warn("No project available in action context")
+        Messages.showErrorDialog(
+            "No project is currently available. Please ensure a project is open and try again.",
+            "No Project Available"
+        )
+        return null
+    }
+
+    /**
+     * Validate that we can access project path and Git repository
+     */
+    private fun validateProjectAccess(project: Project): Project? {
+        return try {
+            val basePath = project.basePath
+            if (basePath == null) {
+                GitHelperLogger.warn("Project ${project.name} has no base path")
+                Messages.showWarningDialog(
+                    project,
+                    "Project '${project.name}' doesn't have a valid base path. Git hooks cannot be configured.",
+                    "Invalid Project Path"
+                )
+                return null
+            }
+
+            // Verify the project path exists
+            val projectDir = java.io.File(basePath)
+            if (!projectDir.exists() || !projectDir.isDirectory) {
+                GitHelperLogger.warn("Project ${project.name} base path doesn't exist: $basePath")
+                Messages.showWarningDialog(
+                    project,
+                    "Project '${project.name}' path doesn't exist: $basePath\nGit hooks cannot be configured.",
+                    "Invalid Project Path"
+                )
+                return null
+            }
+
+            GitHelperLogger.info("Successfully validated project access: ${project.name} at $basePath")
+            project
+        } catch (e: Exception) {
+            GitHelperLogger.error("Failed to validate project access for ${project.name}: ${e.message}")
+            Messages.showErrorDialog(
+                project,
+                "Failed to validate project access: ${e.message}\nGit hooks cannot be configured.",
+                "Project Access Error"
+            )
+            null
+        }
+    }
+
+
 
     private fun showInstallDialog(project: Project, hooksManager: GitHooksManager) {
         val choice = Messages.showYesNoDialog(
@@ -199,6 +262,34 @@ class GitHooksConfigAction : AnAction("Configure Git Hooks") {
     }
 
     override fun update(e: AnActionEvent) {
-        e.presentation.isEnabledAndVisible = e.project != null
+        // Use the same project detection logic as actionPerformed for consistency
+        val project = e.project ?: e.getData(CommonDataKeys.PROJECT)
+        val hasValidProject = project != null && !project.isDisposed
+
+        e.presentation.isEnabledAndVisible = hasValidProject
+
+        if (hasValidProject) {
+            // Optional: Set description based on project Git status
+            try {
+                val hooksManager = GitHooksManager()
+                val status = hooksManager.getHookStatus()
+                when (status) {
+                    GitHooksManager.HookStatus.NO_GIT_REPO -> {
+                        e.presentation.description = "Not a Git repository"
+                    }
+                    GitHooksManager.HookStatus.NOT_INSTALLED -> {
+                        e.presentation.description = "Install Git hooks for automatic code formatting"
+                    }
+                    GitHooksManager.HookStatus.INSTALLED -> {
+                        e.presentation.description = "Manage installed GitHelper hooks"
+                    }
+                    GitHooksManager.HookStatus.OTHER_HOOK_EXISTS -> {
+                        e.presentation.description = "Replace existing Git hooks with GitHelper hooks"
+                    }
+                }
+            } catch (ex: Exception) {
+                e.presentation.description = "Configure Git hooks for automatic code formatting"
+            }
+        }
     }
 }

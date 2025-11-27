@@ -29,6 +29,7 @@ import com.intellij.ui.dsl.builder.*
 import com.intellij.ui.dsl.builder.components.DslLabel
 import com.noorall.githelper.git.GitHooksManager
 import com.noorall.githelper.logging.GitHelperLogger
+import com.intellij.openapi.wm.WindowManager
 import javax.swing.JComponent
 
 class GitHelperConfigurable : Configurable {
@@ -111,7 +112,14 @@ class GitHelperConfigurable : Configurable {
     }
 
     private fun configureGitHooks() {
-        val project = ProjectManager.getInstance().openProjects.firstOrNull()
+        val project = getCurrentActiveProject()
+        if (project == null) {
+            Messages.showErrorDialog(
+                "❌ Unable to get current project",
+                "Configure Git Hooks"
+            )
+            return
+        }
         if (project == null) {
             Messages.showErrorDialog(
                 "No project is currently open. Please open a project first.",
@@ -120,7 +128,7 @@ class GitHelperConfigurable : Configurable {
             return
         }
 
-        val hooksManager = GitHooksManager(project)
+        val hooksManager = GitHooksManager()
         val status = hooksManager.getHookStatus()
 
         when (status) {
@@ -289,15 +297,9 @@ class GitHelperConfigurable : Configurable {
     }
 
     private fun getGitHooksStatus(): String {
-        // Try to get the current project from various sources
-        val project = ProjectManager.getInstance().openProjects.firstOrNull { !it.isDisposed }
-            ?: ProjectManager.getInstance().defaultProject.takeIf { !it.isDisposed }
+        val project = getCurrentActiveProject() ?: return "❌ Unable to get current project"
 
-        if (project == null) {
-            return "📁 Open a project to see Git hooks status"
-        }
-
-        val hooksManager = GitHooksManager(project)
+        val hooksManager = GitHooksManager()
         return when (hooksManager.getHookStatus()) {
             GitHooksManager.HookStatus.NO_GIT_REPO ->
                 "❌ Current project '${project.name}' is not a Git repository"
@@ -308,6 +310,33 @@ class GitHelperConfigurable : Configurable {
             GitHooksManager.HookStatus.OTHER_HOOK_EXISTS ->
                 "⚠️ Another pre-commit hook exists in project '${project.name}'"
         }
+    }
+
+    /**
+     * Get the currently active project from the focused window
+     */
+    private fun getCurrentActiveProject(): com.intellij.openapi.project.Project? {
+        try {
+            val focusManager = com.intellij.openapi.wm.IdeFocusManager.findInstance()
+            val focusedFrame = focusManager.lastFocusedFrame
+
+            if (focusedFrame != null) {
+                val windowManager = WindowManager.getInstance()
+                val projects = ProjectManager.getInstance().openProjects
+
+                for (project in projects) {
+                    if (!project.isDisposed) {
+                        val frame = windowManager.getFrame(project)
+                        if (frame == focusedFrame) {
+                            return project
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GitHelperLogger.warn("Failed to get current active project: ${e.message}")
+        }
+        return null
     }
 
     override fun isModified(): Boolean {
