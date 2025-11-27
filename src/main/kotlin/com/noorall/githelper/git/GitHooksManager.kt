@@ -19,6 +19,8 @@
 package com.noorall.githelper.git
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.wm.WindowManager
 import com.intellij.openapi.vfs.VfsUtil
 import com.noorall.githelper.logging.GitHelperLogger
 import java.io.File
@@ -31,8 +33,10 @@ import java.nio.file.StandardOpenOption
  *
  * Responsible for installing and managing Git pre-commit hooks, implementing true Git-level code formatting
  * This is a more elegant and standard solution that avoids the complexity of IntelliJ UI threads
+ *
+ * 注意：不再依赖静态项目，每次操作都动态获取当前活动项目
  */
-class GitHooksManager(private val project: Project) {
+class GitHooksManager {
 
     companion object {
         private const val PRE_COMMIT_HOOK_NAME = "pre-commit"
@@ -43,8 +47,14 @@ class GitHooksManager(private val project: Project) {
      * Install Git pre-commit hook
      */
     fun installPreCommitHook(): Boolean {
+        val project = getCurrentActiveProject()
+        if (project == null) {
+            GitHelperLogger.warn("Cannot install pre-commit hook: No active project found")
+            return false
+        }
+
         try {
-            val gitDir = findGitDirectory() ?: return false
+            val gitDir = findGitDirectory(project) ?: return false
             val hooksDir = File(gitDir, "hooks")
             
             if (!hooksDir.exists()) {
@@ -54,12 +64,12 @@ class GitHooksManager(private val project: Project) {
             val preCommitFile = File(hooksDir, PRE_COMMIT_HOOK_NAME)
             
             // Backup existing hook (if exists)
-            if (preCommitFile.exists() && !isPreCommitHookInstalled()) {
+            if (!isPreCommitHookInstalled()) {
                 backupExistingHook(preCommitFile)
             }
 
             // Create new pre-commit hook
-            val hookContent = generatePreCommitHookContent()
+            val hookContent = generatePreCommitHookContent(project)
             Files.write(preCommitFile.toPath(), hookContent.toByteArray(), 
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
             
@@ -79,8 +89,14 @@ class GitHooksManager(private val project: Project) {
      * Uninstall Git pre-commit hook
      */
     fun uninstallPreCommitHook(): Boolean {
+        val project = getCurrentActiveProject()
+        if (project == null) {
+            GitHelperLogger.warn("Cannot uninstall pre-commit hook: No active project found")
+            return false
+        }
+
         try {
-            val gitDir = findGitDirectory() ?: return false
+            val gitDir = findGitDirectory(project) ?: return false
             val hooksDir = File(gitDir, "hooks")
             val preCommitFile = File(hooksDir, PRE_COMMIT_HOOK_NAME)
             val backupFile = File(hooksDir, "$PRE_COMMIT_HOOK_NAME$BACKUP_SUFFIX")
@@ -135,7 +151,8 @@ class GitHooksManager(private val project: Project) {
      * Check if pre-commit hook is installed
      */
     fun isPreCommitHookInstalled(): Boolean {
-        val gitDir = findGitDirectory() ?: return false
+        val project = getCurrentActiveProject() ?: return false
+        val gitDir = findGitDirectory(project) ?: return false
         val preCommitFile = File(File(gitDir, "hooks"), PRE_COMMIT_HOOK_NAME)
         
         if (!preCommitFile.exists()) {
@@ -145,8 +162,7 @@ class GitHooksManager(private val project: Project) {
         // Check if this is our installed hook
         return try {
             val content = preCommitFile.readText()
-            content.contains("GitHelper Spotless Pre-commit Hook") ||
-            content.contains("GitHelper Spotless Pre-commit Hook with Async Communication")
+            content.contains("GitHelper")
         } catch (e: Exception) {
             false
         }
@@ -155,7 +171,7 @@ class GitHooksManager(private val project: Project) {
     /**
      * Find Git directory
      */
-    private fun findGitDirectory(): File? {
+    private fun findGitDirectory(project: Project): File? {
         val projectPath = project.basePath ?: return null
         var currentDir = File(projectPath)
 
@@ -199,7 +215,7 @@ class GitHooksManager(private val project: Project) {
     /**
      * Generate pre-commit hook content
      */
-    private fun generatePreCommitHookContent(): String {
+    private fun generatePreCommitHookContent(project: Project): String {
         val projectPath = project.basePath ?: ""
         val settings = com.noorall.githelper.settings.GitHelperSettings.getInstance()
         val hookTimeout = settings.hookTimeout
@@ -344,13 +360,13 @@ main
      * Get hook status information
      */
     fun getHookStatus(): HookStatus {
-        val gitDir = findGitDirectory()
+        val project = getCurrentActiveProject() ?: return HookStatus.NO_GIT_REPO
+        val gitDir = findGitDirectory(project)
         if (gitDir == null) {
             return HookStatus.NO_GIT_REPO
         }
 
         val preCommitFile = File(File(gitDir, "hooks"), PRE_COMMIT_HOOK_NAME)
-        val backupFile = File(File(gitDir, "hooks"), "$PRE_COMMIT_HOOK_NAME$BACKUP_SUFFIX")
 
         return when {
             !preCommitFile.exists() -> HookStatus.NOT_INSTALLED
@@ -364,5 +380,32 @@ main
         INSTALLED,          // Our hook is installed
         OTHER_HOOK_EXISTS,  // Another pre-commit hook exists
         NO_GIT_REPO        // Not a Git repository
+    }
+
+    /**
+     * Get the currently active project from the focused window
+     */
+    private fun getCurrentActiveProject(): Project? {
+        try {
+            val focusManager = com.intellij.openapi.wm.IdeFocusManager.findInstance()
+            val focusedFrame = focusManager.lastFocusedFrame
+
+            if (focusedFrame != null) {
+                val windowManager = WindowManager.getInstance()
+                val projects = ProjectManager.getInstance().openProjects
+
+                for (project in projects) {
+                    if (!project.isDisposed) {
+                        val frame = windowManager.getFrame(project)
+                        if (frame == focusedFrame) {
+                            return project
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GitHelperLogger.warn("Failed to get current active project: ${e.message}")
+        }
+        return null
     }
 }
